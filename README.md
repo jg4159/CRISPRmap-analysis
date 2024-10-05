@@ -9,4 +9,4 @@ This repository is for the deposit of scripts used in CRISPRmap image data analy
 
 4. DDR foci quantification: detect DDR foci (and micronuclei) via spot calling and assign foci to corresponding cell masks
 
-5. CRISPRmap amplicon detection & decoding for BFP-GFP assay
+5. BFP-GFP mix CRISPRmap amplicon detection & decoding: CRISPRmap amplicon detection & decoding for BFP-GFP assay
