@@ -10,3 +10,5 @@ This repository is for the deposit of scripts used in CRISPRmap image data analy
 4. DDR foci quantification: detect DDR foci (and micronuclei) via spot calling and assign foci to corresponding cell masks
 
 5. BFP-GFP mix CRISPRmap amplicon detection & decoding: CRISPRmap amplicon detection & decoding for BFP-GFP assay
+
+6. NGS library guide-barcode recombination analysis: quantification of guide-barcode recombination rate for CRISRPmap libraries at oligo pool, plasmid, genomic DNA levels via NGS reads analysis
