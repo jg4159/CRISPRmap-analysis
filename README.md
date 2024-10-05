@@ -1,7 +1,7 @@
 # CRISPRmap analysis
 This repository is for the deposit of scripts used in CRISPRmap image (and sequencing) data analysis only.
 
-1. Split probe: design RNAmap Padlock and Primer pairs on transcripts
+1. Split probe: design RNAmap Padlock and Primer pairs based on sepcific transcript sequences
 
 2. T-cell & melanoma cell interaction analysis: identify melanoma cell-interacting T cells based on cell membrane and nucleus segmentation
 
