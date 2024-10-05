@@ -1,0 +1,377 @@
+---
+title: "sequencing result"
+author: "Jiacheng Gu"
+date: "6/9/2021"
+output:
+  pdf_document: default
+  html_document: default
+---
+
+
+#1
+
+##1.1 Read the codebook for guide-barcode matching
+```{r}
+BEpilot_code=read.csv('DDR364_hb_comb.csv')
+BEpilot_code
+hb_seq=read.csv('BEpilot_hb.csv' )
+h_seq=hb_seq[1:54,]
+b_seq=hb_seq[55:108,]
+```
+Find files by pattern
+```{r}
+files=list.files(path = './AmpliconEZ sequencing/30-754151309/UniqueSeq/', pattern = '_Unique_Seq.csv')
+files=unlist(strsplit(files, '_Unique_Seq.csv'))
+files
+```
+## 1.2 quality check
+```{r}
+folder='AmpliconEZ sequencing/30-754151309/UniqueSeq/'
+filename=files
+#QC thresholds
+read.cutoff = 1
+length.cutoff = 170
+for (count.file in 1:length(filename)){
+  df.count = read.csv(paste(folder,filename[count.file],'_Unique_Seq.csv',sep=''))
+  df.count=df.count[,c(1,2)]
+  print('----------------------------------------------------------------')
+  print(filename[count.file])
+  
+  print(sprintf('total reads: %d', sum(df.count$Count)))
+  print(sprintf('total lines: %d', nrow(df.count)))
+  total.reads[count.file]=sum(df.count$Count)
+  #plot read length
+  agg.read=aggregate(df.count$Count, by=list(Category=nchar(df.count$Sequence)), FUN=sum)
+  barplot(agg.read$x,names.arg = agg.read$Category)
+  # filter reads
+  df.count.filtered=df.count[df.count$Count>read.cutoff,]
+  df.count.filtered=df.count.filtered[order(-df.count.filtered$Count),]
+  df.count.filtered=df.count.filtered[nchar(df.count.filtered$Sequence)>length.cutoff,]
+  df.count.filtered$read_length=nchar(df.count.filtered$Sequence)
+  filtered.reads[count.file]=sum(df.count$Count)-sum(df.count.filtered$Count)
+  print(sprintf('remaining reads: %d', sum(df.count.filtered$Count)))
+  print(sprintf('remaining lines: %d', nrow(df.count.filtered)))
+}
+```
+## 1.3 Find and group similar guide sequences in the library
+```{r}
+library(stringr)
+library(Biostrings)
+blast.cutoff=13
+
+start=Sys.time()
+#blast.score
+blast.score.sg=t(sapply(1:nrow(BEpilot_code), function(i){
+  print(i)
+  sapply(BEpilot_code$gRNA, function(j){
+    score(pairwiseAlignment(j,BEpilot_code$gRNA[i], type = "local", substitutionMatrix = mat,gapOpening = 1, gapExtension = 2))
+    }
+  )}
+))
+end=Sys.time()
+print(end-start)
+colnames(blast.score.sg)=paste(BEpilot_code$sg_id,'align',sep='_')
+len=20
+hist(apply(blast.score.sg,1,max),
+    main="sgRNA alignment (max)",
+    xlab="alignment score",
+    xlim=c(0,len),breaks = len
+  )
+```
+```{r}
+blast.score.sg <- data.frame(blast.score.sg)
+row.names(blast.score.sg) <- BEpilot_code$sg_id
+blast.score.sg
+```
+```{r}
+sg.similar <- sapply(1:nrow(blast.score.sg),function(i){
+  idx <- which(blast.score.sg[i,]>=blast.cutoff)
+  row.names(blast.score.sg)[idx]
+})
+sg.similar
+```
+
+
+## 1.4 Guide-barcode recombination analysis based on the NGS count table
+ - Step 1: align primer (head) sequences to the NGS reads
+ - Step 2: align padlock (body) sequences to the NGS reads
+ - Step 3: find the head & body combo in the codebook, then find the matching guide (expected guide)
+ - Step 4: align guide sequences to the NGS reads (actual guide)
+ - Step 5: quantify guide-barcode recombination rate (actual vs. expected guide matching rate)
+
+local alignment matrix
+match +1; mismatch -2; gap open -1; gap ext -2
+```{r}
+folder='AmpliconEZ sequencing/30-754151309/UniqueSeq/'
+filename=files[c(2,4,6)]
+#QC thresholds
+read.cutoff = 1
+length.cutoff = 170
+#output parameters
+total.reads = rep(0,length(filename))
+filtered.reads = rep(0,length(filename))
+library.components = BEpilot_code$sg_id
+df.relative.abundance=matrix(0,nrow=length(filename),ncol = length(library.components)+2)
+colnames(df.relative.abundance)=c('_multi','_None', library.components)
+row.names(df.relative.abundance)=filename
+##
+df.hb.detection=matrix(0,nrow=length(filename), ncol = 5)
+colnames(df.hb.detection)=c('neither','head-only','body-only','multi','both')
+row.names(df.hb.detection)=filename
+##
+df.match.status=matrix(0,nrow=length(filename), ncol = 8)
+colnames(df.match.status)=c('matched','switched','NO_HB','MT_HB','UA_HB','NO_sg','MT_sg','NA')
+row.names(df.match.status)=filename
+
+mat <- nucleotideSubstitutionMatrix(match = 1, mismatch = -2, baseOnly = FALSE)
+
+#iterations
+start=Sys.time()
+for (count.file in 1:length(filename)){
+  df.count = read.csv(paste(folder,filename[count.file],'_Unique_Seq.csv',sep=''))
+  df.count=df.count[,c(1,2)]
+  print('----------------------------------------------------------------')
+  print(filename[count.file])
+  print(sprintf('total reads: %d', sum(df.count$Count)))
+  print(sprintf('total lines: %d', nrow(df.count)))
+  total.reads[count.file]=sum(df.count$Count)
+  #plot read length
+  #agg.read=aggregate(df.count$Count, by=list(Category=nchar(df.count$Sequence)), FUN=sum)
+  #barplot(agg.read$x,names.arg = agg.read$Category)
+  # filter reads
+  df.count.filtered=df.count[df.count$Count>read.cutoff,]
+  df.count.filtered=df.count.filtered[order(-df.count.filtered$Count),]
+  df.count.filtered=df.count.filtered[nchar(df.count.filtered$Sequence)>length.cutoff,]
+  df.count.filtered$read_length=nchar(df.count.filtered$Sequence)
+  filtered.reads[count.file]=sum(df.count$Count)-sum(df.count.filtered$Count)
+  print(sprintf('remaining reads: %d', sum(df.count.filtered$Count)))
+  print(sprintf('remaining lines: %d', nrow(df.count.filtered)))
+  df.count.filtered=df.count.filtered[1:13000,]
+                                        
+  ##2.2 Detect H&B sequences
+  blast.cutoff=21
+  # find heads
+  print("Aligning heads:")
+  blast.score.h=t(sapply(1:nrow(df.count.filtered), function(i){
+    if(i%%1000==0){
+      print(i)
+    }
+    tar <- substr(df.count.filtered$Sequence[i],111,nchar(df.count.filtered$Sequence[i]))
+    sapply(h_seq$rc, function(j) score(pairwiseAlignment(j,tar, type = "local", substitutionMatrix = mat,gapOpening = 1, gapExtension = 2)))}))
+  colnames(blast.score.h)=paste(h_seq$hb_id,'align',sep='_')
+  len=30
+  hist(apply(blast.score.h,1,max),
+    main="Head alignment (max)",
+    xlab="alignment score",
+    xlim=c(0,len),breaks = len
+  )
+  #Determine head identity by align score
+  df.count.filtered=cbind(df.count.filtered, blast.score.h)
+  df.count.filtered$h_id=sapply(1:nrow(df.count.filtered), function(i){
+  h_detect=blast.score.h[i,]
+  if(sum(h_detect>=blast.cutoff)==1){
+      h_id=h_seq$hb_id[h_detect>=blast.cutoff]
+    }else if(sum(h_detect>=blast.cutoff)>1){
+      h_id='_multi'
+    }else{
+      h_id='_None'
+    }
+  })
+  #blast.score
+  print("Aligning body:")
+  
+  blast.score.b=t(sapply(1:nrow(df.count.filtered), function(i){
+    if(i%%1000==0){
+      print(i)
+    }
+    tar <- substr(df.count.filtered$Sequence[i],111,nchar(df.count.filtered$Sequence[i]))
+    sapply(b_seq$rc, function(j) score(pairwiseAlignment(j,tar, type = "local", substitutionMatrix = mat,gapOpening = 1, gapExtension = 2)))}))
+  colnames(blast.score.b)=paste(b_seq$hb_id,'align',sep='_')
+  len=30
+  hist(apply(blast.score.b,1,max),
+    main="Body alignment (max)",
+    xlab="alignment score",
+    xlim=c(0,len),breaks = len
+  )
+  #Determine head identity by align score
+  df.count.filtered=cbind(df.count.filtered, blast.score.b)
+  df.count.filtered$b_id=sapply(1:nrow(df.count.filtered), function(i){
+  b_detect=blast.score.b[i,]
+  if(sum(b_detect>=blast.cutoff)==1){
+      b_id=b_seq$hb_id[b_detect>=blast.cutoff]
+    }else if(sum(b_detect>=blast.cutoff)>1){
+      b_id='_multi'
+    }else{
+      b_id='_None'
+    }
+  })
+  
+  df.count.filtered$hb_detected=sapply(1:nrow(df.count.filtered), function(i){
+    if(df.count.filtered$h_id[i]=='_None'&df.count.filtered$b_id[i]=='_None'){
+      'neither'
+    } else if (df.count.filtered$h_id[i]=='_None'&df.count.filtered$b_id[i]!='_None'){
+      'body-only'
+    } else if (df.count.filtered$h_id[i]!='_None'&df.count.filtered$b_id[i]=='_None'){
+      'head-only'
+    } else if (df.count.filtered$h_id[i]=='_multi'|df.count.filtered$b_id[i]=='_multi'){
+      'multi'
+    }else{
+      'both'
+    }
+  })
+  agg.hb_detected=aggregate(df.count.filtered$Count, by=list(Category=df.count.filtered$hb_detected), FUN=sum)
+  agg.hb_detected$freq=round(agg.hb_detected$x / sum(agg.hb_detected$x),2)
+  agg.hb_detected=agg.hb_detected[order(agg.hb_detected$x, decreasing = TRUE),]
+  df.hb.detection[count.file,]=sapply(colnames(df.hb.detection), function(i){
+    if (i %in% agg.hb_detected$Category){
+      agg.hb_detected$x[agg.hb_detected$Category==i]
+    } else {
+      0
+    }
+  })
+  print(df.hb.detection[count.file,])
+  
+   #plot h b detection
+  ab.defined=agg.hb_detected$x
+  ylim <- c(0, 1.1*max(ab.defined))
+  xx <- barplot(ab.defined, xaxt = 'n', xlab = '', width = .7, ylim = ylim,
+              main = paste(filename[count.file], "H/B Presence"), 
+              ylab = "Frequency")
+  text(x = xx, y = ab.defined, label = round(ab.defined/sum(ab.defined),2), pos = 3, cex = 0.8, col = "red")
+   text(x = xx, y = ab.defined/2, label = ab.defined, pos = 3, cex = 0.8, col = "black")
+  axis(1, at=xx, labels=agg.hb_detected$Category,cex.axis=1)
+  
+  # find sgRNAs
+  print("Aligning guides:")
+  
+  blast.cutoff=13
+  #blast.score
+  blast.score.sg=t(sapply(1:nrow(df.count.filtered), function(i){
+    if(i%%1000==0){
+      print(i)
+    }
+    tar <- substr(df.count.filtered$Sequence[i],1,25)
+    sapply(BEpilot_code$gRNA, function(j) score(pairwiseAlignment(j,tar, type = "local", substitutionMatrix = mat,gapOpening = 1, gapExtension = 2)))}))
+  colnames(blast.score.sg)=paste(BEpilot_code$sg_id,'align',sep='_')
+  len=20
+  hist(apply(blast.score.sg,1,max),
+    main="sgRNA alignment (max)",
+    xlab="alignment score",
+    xlim=c(0,len),breaks = len
+  )
+  
+  #Determine sgRNA identity by align score
+  df.count.filtered=cbind(df.count.filtered, blast.score.sg)
+  
+  df.count.filtered$sg_id=sapply(1:nrow(df.count.filtered), function(i){
+    sg_detect <- as.integer(blast.score.sg[i,])
+    if(sum(sg_detect>=blast.cutoff)==1){#single hit, output the hit
+      sg_id=BEpilot_code$sg_id[sg_detect>=blast.cutoff]
+    }else if(sum(sg_detect>=blast.cutoff)>1){#multi hit, check if they are similar guides
+      hits_idx <- which(sg_detect>=blast.cutoff)
+      hits <- BEpilot_code$sg_id[which(sg_detect>=blast.cutoff)]
+      similar <- TRUE
+      for(k in hits_idx){
+        similar <- identical(sg.similar[[k]], hits)
+      }
+      if(similar){# output the sg_id with the max align score
+        sg_id= BEpilot_code$sg_id[which.max(blast.score.sg[i,])]
+      }else{
+        sg_id='_multi'
+      }
+      
+    }else{# no hit
+      sg_id='_None'
+    }
+    sg_id
+  })
+  agg.sg_id=aggregate(df.count.filtered$Count, by=list(Category=df.count.filtered$sg_id), FUN=sum)
+  agg.sg_id$freq=round(agg.sg_id$x / sum(agg.sg_id$x),2)
+  df.relative.abundance[count.file,]=sapply(colnames(df.relative.abundance), function(i){
+    if (i %in% agg.sg_id$Category){
+      agg.sg_id$x[agg.sg_id$Category==i]
+    } else {
+      0
+    }
+  })
+  print(df.relative.abundance[count.file,])
+
+  #plot relative abundance
+  ab.defined=agg.sg_id$x
+  ylim <- c(0, 1.1*max(ab.defined))
+  xx <- barplot(ab.defined, width = .7, ylim = ylim,
+              horiz = FALSE,
+              main = paste(filename[count.file], "relative abundance"), 
+              ylab = "Frequency")
+  text(x = xx, y = ab.defined, label = ab.defined, pos = 3, cex = 0.4, col = "red")
+  axis(1, at=xx, labels=agg.sg_id$Category,cex.axis=.5,las=2)
+
+  
+  #get recombination rate
+  #expect sg catogories: 'NO_H/B','MT_H/B', sg_id, 'UA_H&B'
+  #get recombination rate
+  #expect sg catogories: 'NO_HB','MT_HB', sg_id, 'UA_HB'
+   df.count.filtered$expect_sg=sapply(1:nrow(df.count.filtered), function(i){
+      if(df.count.filtered$hb_detected[i]!='both'&df.count.filtered$hb_detected[i]!='multi'){
+        'NO_HB'
+      } else if (df.count.filtered$hb_detected[i]=='multi'){
+        'MT_HB'
+      }else {#single HB
+        if(paste(df.count.filtered$h_id[i],df.count.filtered$b_id[i],sep='&')%in%BEpilot_code$hb_id){
+          BEpilot_code$sg_id[BEpilot_code$hb_id==paste(df.count.filtered$h_id[i],df.count.filtered$b_id[i],sep='&')]
+        } else {'UA_HB'}
+      }
+    })
+    
+  #'matched','switched','NO_HB','MT_HB','UA_HB','NO_sg','MT_sg','NA'
+    df.count.filtered$match_status=sapply(1:nrow(df.count.filtered), function(i){
+      if(df.count.filtered$expect_sg[i]%in%c('NO_HB','MT_HB','UA_HB')){
+          df.count.filtered$expect_sg[i]
+      }else if (df.count.filtered$sg_id[i]!='_None'&df.count.filtered$sg_id[i]!='_multi'){#unique sg_id
+          if(df.count.filtered$expect_sg[i]==df.count.filtered$sg_id[i]){
+            'matched'
+          }else{
+            'switched'
+          }
+      }else if(df.count.filtered$sg_id[i]=='_None') {#no sg detected
+          'NO_sg'
+      }else if(df.count.filtered$sg_id[i]=='_multi') {#multi sg detected
+          'MT_sg'
+      }else{
+          'NA'
+      }
+    })
+  
+  agg.match_status=aggregate(df.count.filtered$Count, by=list(Category=df.count.filtered$match_status), FUN=sum)
+  agg.match_status$freq=round(agg.match_status$x / sum(agg.match_status$x),2)
+  agg.match_status=agg.match_status[order(agg.match_status$x, decreasing = TRUE),]
+  df.match.status[count.file,]=sapply(colnames(df.match.status), function(i){
+    if (i %in% agg.match_status$Category){
+      agg.match_status$x[agg.match_status$Category==i]
+    } else {
+      0
+    }
+  })
+  
+     ab.defined=agg.match_status$x
+  ylim <- c(0, 1.1*max(ab.defined))
+  xx <- barplot(ab.defined, xaxt = 'n', xlab = '', width = .7, ylim = ylim,
+              main = paste(filename[count.file], "barcode-guide recombination"), 
+              ylab = "Frequency")
+  text(x = xx, y = ab.defined, label = round(ab.defined/sum(ab.defined),2), pos = 3, cex = 0.8, col = "red")
+   text(x = xx, y = ab.defined/2, label = ab.defined, pos = 3, cex = 0.8, col = "black")
+  axis(1, at=xx, labels=agg.match_status$Category,cex.axis=.7)
+  
+ #'''
+  write.csv(df.count.filtered,paste(folder,filename[count.file],'cutoff',blast.cutoff,'_HB_detection_all.csv', sep=''))
+  
+#end of iteration
+}
+output=data.frame(total_reads=total.reads,filtered_reads=filtered.reads,df.relative.abundance,df.hb.detection,df.match.status)
+print(output)
+write.csv(output,paste(folder,'cutoff',blast.cutoff,'_combined_analysis_all.csv', sep=''))
+end=Sys.time()
+print(end-start)
+```
+
+
